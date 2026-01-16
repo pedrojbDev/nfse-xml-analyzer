@@ -1,0 +1,4 @@
+cnae;match_type;pattern;label;severity
+8610101;contains;HONOR;Honorários médicos;info
+8610101;contains;EMERG;Atendimento de emergência;info
+0000000;regex;LOCAÇÃO|OUTSOURCING|IMPRESS;Serviços não médicos;warning
