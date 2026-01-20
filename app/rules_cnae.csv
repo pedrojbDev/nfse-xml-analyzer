@@ -1,4 +1,18 @@
 cnae;match_type;pattern;label;severity
-8610101;contains;HONOR;Honorários médicos;info
-8610101;contains;EMERG;Atendimento de emergência;info
-0000000;regex;LOCAÇÃO|OUTSOURCING|IMPRESS;Serviços não médicos;warning
+8610101;regex;HONOR(Á|A)?RIOS?|HONOR\.;Honorários médicos;info
+8610101;regex;PLANT(Ã|A)O|PLANTAO;Plantão médico;info
+8610101;regex;EMERG(Ê|E)NCIA|EMERG|PRONTO[\s-]?ATENDIMENTO|\bPA\b;Atendimento de urgência/emergência;info
+8610101;regex;ATENDIMENTO\s+M(É|E)DICO|ASSIST(Ê|E)NCIA\s+M(É|E)DICA;Atendimento médico;info
+
+8610102;regex;CONSULTA(S)?\b|AMBULAT(Ó|O)RIO|ATENDIMENTO\s+AMBULATORIAL;Consulta/ambulatorial;info
+8610102;regex;CL(Í|I)NICA|CONSULT(Ó|O)RIO;Clínica/consultório;info
+8610102;regex;RETORNO|REAVALIA(Ç|C)(A|Ã)O;Retorno/reavaliação;info
+
+8630503;regex;EXAME(S)?|LAUDO(S)?|RELAT(Ó|O)RIO(S)?\b;Exames/laudos;info
+8630503;regex;IMAGEM|ULTRA(SS|S)OM|RAIO[\s-]?X|TOMOGRAFIA|RESSON(Â|A)NCIA;Diagnóstico por imagem;info
+8630503;regex;PROCEDIMENTO(S)?|CURATIVO(S)?|SUTURA(S)?|INFILTRA(Ç|C)(A|Ã)O;Procedimentos;info
+
+8610*;regex;M(É|E)DIC(O|A)|DOUTOR(A)?\b|CRM\b;Indício de serviço médico (família 8610);info
+
+*;regex;LOCA(Ç|C)(A|Ã)O|OUTSOURCING|IMPRESS(Ã|A)O|ALUGUEL|COMODATO;Serviço não-médico (possível inconsistência);warning
+*;regex;CONSULTORIA|ASSESSORIA|SUPORTE\s+T(É|E)CNICO|MANUTEN(Ç|C)(A|Ã)O;Serviço não-médico (possível inconsistência);warning

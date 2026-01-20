@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 from app.services.cnae_rules import validate_cnae_vs_descricao
+from app.services.decision import decide_for_erp_from_xml_item
+
 
 
 
@@ -286,6 +288,10 @@ def _parse_all_items_from_xml(xml_bytes: bytes) -> Tuple[List[Dict[str, Any]], D
     missing_valor_total = 0
     missing_competencia = 0
     missing_crit_any = 0
+    count_dec_auto = 0
+    count_dec_review = 0
+    count_dec_block = 0
+
 
     # Somatórios tributários (apenas quando existirem)
     sum_valor_iss = 0.0
@@ -417,6 +423,7 @@ def _parse_all_items_from_xml(xml_bytes: bytes) -> Tuple[List[Dict[str, Any]], D
 
 
         item = {
+            
             "fields": fields,
             "taxes": taxes,
             "missing_fields": missing,
@@ -439,10 +446,26 @@ def _parse_all_items_from_xml(xml_bytes: bytes) -> Tuple[List[Dict[str, Any]], D
             "cnae_vs_descricao": validation_cnae
             },
         }
+        decision, reasons = decide_for_erp_from_xml_item(item)
+        item["decision"] = decision
+        item["reasons"] = reasons
+
+        if decision == "AUTO":
+            count_dec_auto += 1
+        elif decision == "REVIEW":
+            count_dec_review += 1
+        else:
+            count_dec_block += 1
         items.append(item)
+    
 
     summary = {
         "count": len(items),
+        "decision_summary": {
+            "auto": count_dec_auto,
+            "review": count_dec_review,
+            "block": count_dec_block,
+        },
         "sum_valor_total_politica_a": round(total_valor_servicos, 2),
 
         "count_valor_liquido_informado_xml": count_valor_liquido_informado,
@@ -525,7 +548,9 @@ def parse_nfse_xml_abrasf_paged(xml_bytes: bytes, filename: str, page: int, page
             "received": False,
             "filename": result.filename,
             "sha256": result.sha256,
-            "count": 0,
+            "count": 0,              # compat antigo (total)
+            "count_total": 0,        # novo
+            "count_page": 0,         # novo
             "page": page,
             "page_size": page_size,
             "pages": 0,
@@ -533,27 +558,38 @@ def parse_nfse_xml_abrasf_paged(xml_bytes: bytes, filename: str, page: int, page
             "summary": result.summary,
         }
 
-    total = result.count
+    total = result.count  # TOTAL real do XML (ex.: 380)
     page = max(1, int(page))
     page_size = max(1, min(int(page_size), 500))
     pages = (total + page_size - 1) // page_size
 
     start = (page - 1) * page_size
     end = min(start + page_size, total)
-
     sliced = result.items[start:end] if start < total else []
+
+    # Garante que summary "count" represente o TOTAL (evita qualquer inconsistência)
+    summary = dict(result.summary or {})
+    summary["count"] = total
 
     return {
         "received": True,
         "filename": result.filename,
         "sha256": result.sha256,
+
+        # compatibilidade: "count" continua sendo o TOTAL
         "count": total,
+
+        # novos campos explícitos (recomendado a UI usar)
+        "count_total": total,
+        "count_page": len(sliced),
+
         "page": page,
         "page_size": page_size,
         "pages": pages,
         "items": sliced,
-        "summary": result.summary,
+        "summary": summary,
     }
+
 
 
 
@@ -594,6 +630,9 @@ def export_nfse_items_to_csv(items: List[Dict[str, Any]]) -> str:
             "desconto_condicionado",
             "valor_liquido_nfse",
             "valor_liquido_calculado_politica_b",
+            "decision",
+            "reasons",
+
         ]
     )
 
@@ -632,6 +671,8 @@ def export_nfse_items_to_csv(items: List[Dict[str, Any]]) -> str:
                 t.get("desconto_condicionado") if t.get("desconto_condicionado") is not None else "",
                 t.get("valor_liquido_nfse") if t.get("valor_liquido_nfse") is not None else "",
                 t.get("valor_liquido_calculado_politica_b") if t.get("valor_liquido_calculado_politica_b") is not None else "",
+                item.get("decision") or "",
+                ",".join(item.get("reasons", []) or []),
             ]
         )
 

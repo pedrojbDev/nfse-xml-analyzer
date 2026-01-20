@@ -1,17 +1,16 @@
 from __future__ import annotations
-
+from pathlib import Path
 import csv
 import os
 import re
 from dataclasses import dataclass
 from functools import lru_cache
-from pathlib import Path
 from typing import Dict, List, Optional
 
 
 @dataclass(frozen=True)
 class CnaeRule:
-    cnae: str              # dígitos ou "*" (wildcard)
+    cnae: str              # ex: "8610101", "8610*", "*" (wildcard global)
     match_type: str        # "contains" | "regex"
     pattern: str
     label: str
@@ -30,32 +29,71 @@ def _digits_only(s: Optional[str]) -> Optional[str]:
 
 
 def _default_rules_path() -> str:
-    # Permite configurar via env (caminho absoluto ou relativo)
-    env_path = os.getenv("CNAE_RULES_PATH")
-    if env_path:
-        return env_path
+    """
+    Resolve o caminho do CSV de regras de forma robusta.
 
-    # Default: rules_cnae.csv dentro da pasta "app"
-    # cnae_rules.py está em app/services/ -> parents[1] == app/
-    base_app_dir = Path(__file__).resolve().parents[1]
-    return str(base_app_dir / "rules_cnae.csv")
+    Estrutura do projeto:
+      app/
+        rules_cnae.csv
+        services/
+          cnae_rules.py
 
+    Logo, a pasta "app" é o parent da pasta "services".
+    """
+    env = os.getenv("CNAE_RULES_PATH")
+    if env and env.strip():
+        return env.strip()
+
+    app_dir = Path(__file__).resolve().parents[1]  # .../app
+    return str(app_dir / "rules_cnae.csv")
+
+
+def _rule_applies(rule_cnae: str, cnae_norm: str) -> bool:
+    """
+    Matching de escopo de CNAE:
+      - "*" aplica a tudo
+      - "8610101" aplica exato
+      - "8610*" aplica por prefixo (8610...)
+    """
+    rc = (rule_cnae or "").strip()
+    if not rc:
+        return False
+
+    if rc == "*":
+        return True
+
+    # prefix wildcard
+    if rc.endswith("*"):
+        prefix = _digits_only(rc[:-1]) or ""
+        return bool(prefix) and cnae_norm.startswith(prefix)
+
+    # exact
+    return _digits_only(rc) == cnae_norm
+
+
+def _rule_specificity(rule_cnae: str) -> int:
+    """
+    Quanto maior, mais específica:
+      - CNAE exato: 3
+      - prefixo (ex: 8610*): 2
+      - wildcard "*": 1
+    """
+    rc = (rule_cnae or "").strip()
+    if rc == "*":
+        return 1
+    if rc.endswith("*"):
+        return 2
+    return 3
 
 
 @lru_cache(maxsize=1)
 def load_cnae_rules(path: Optional[str] = None) -> List[CnaeRule]:
-    """
-    Carrega regras de CNAE a partir de CSV (;).
-    Cacheado em memória para não reler arquivo a cada request.
-    """
-    path_str = (path or _default_rules_path()).strip()
-    p = Path(path_str)
-
-    if not p.exists():
+    path = path or _default_rules_path()
+    if not os.path.exists(path):
         return []
 
     rules: List[CnaeRule] = []
-    with p.open("r", encoding="utf-8-sig", newline="") as f:
+    with open(path, "r", encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f, delimiter=";")
         for row in reader:
             cnae = _norm(row.get("cnae")) or "*"
@@ -77,11 +115,12 @@ def load_cnae_rules(path: Optional[str] = None) -> List[CnaeRule]:
                 )
             )
 
+    # ordena por especificidade (exato > prefixo > wildcard)
+    rules.sort(key=lambda r: _rule_specificity(r.cnae), reverse=True)
     return rules
 
 
 def reload_cnae_rules() -> None:
-    """Força recarregar regras (limpa cache)."""
     load_cnae_rules.cache_clear()
 
 
@@ -90,12 +129,6 @@ def validate_cnae_vs_descricao(
     descricao: Optional[str],
     rules_path: Optional[str] = None,
 ) -> Dict[str, Optional[str]]:
-    """
-    Retorna um dict padronizado para anexar no item:
-      status: "ok" | "alert" | "unknown"
-      rule_label, severity, rule_pattern, rule_cnae
-      reason (texto curto)
-    """
     cnae_norm = _digits_only(cnae)
     desc = (descricao or "").strip()
 
@@ -105,7 +138,7 @@ def validate_cnae_vs_descricao(
             "rule_label": None,
             "severity": None,
             "rule_pattern": None,
-            "rule_cnae": None,
+            "rule_cnae": cnae_norm,
             "reason": "CNAE ou descrição ausente",
         }
 
@@ -116,18 +149,19 @@ def validate_cnae_vs_descricao(
             "rule_label": None,
             "severity": None,
             "rule_pattern": None,
-            "rule_cnae": None,
+            "rule_cnae": cnae_norm,
             "reason": "Sem arquivo de regras configurado",
         }
 
     desc_up = desc.upper()
 
-    # Regras específicas do CNAE primeiro + wildcard depois
-    scoped = [r for r in rules if r.cnae == cnae_norm]
-    wild = [r for r in rules if r.cnae == "*"]
-    candidates = scoped + wild
+    # candidatos que aplicam ao CNAE
+    applicable = [r for r in rules if _rule_applies(r.cnae, cnae_norm)]
 
-    for r in candidates:
+    # se NÃO existe nenhuma regra específica/prefixo para esse CNAE, só wildcard -> unknown (evita falso positivo)
+    has_specific_scope = any((r.cnae != "*") and _rule_applies(r.cnae, cnae_norm) for r in rules)
+
+    for r in applicable:
         if r.match_type == "contains":
             if r.pattern.upper() in desc_up:
                 return {
@@ -149,18 +183,18 @@ def validate_cnae_vs_descricao(
                     "reason": "Descrição compatível com regex",
                 }
 
-    # Se existem regras específicas para o CNAE e nenhuma bateu => ALERTA
-    if scoped:
+    # existe regra específica para esse CNAE (ou prefixo) mas nenhuma bateu => alert
+    if has_specific_scope:
         return {
             "status": "alert",
             "rule_label": None,
             "severity": "warning",
             "rule_pattern": None,
             "rule_cnae": cnae_norm,
-            "reason": "Nenhuma regra do CNAE bateu com a descrição",
+            "reason": "Nenhuma regra aplicável bateu com a descrição",
         }
 
-    # Sem regra específica para esse CNAE => unknown (para não gerar falso positivo)
+    # só wildcard global existe => unknown
     return {
         "status": "unknown",
         "rule_label": None,
