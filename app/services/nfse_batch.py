@@ -1,3 +1,12 @@
+# app/services/nfse_batch.py
+"""
+Serviço de processamento em lote de NFS-e.
+
+Responsável por:
+- Processar ZIPs com múltiplos XMLs de NFS-e
+- Agregar resultados do lote
+- Retornar dados completos por arquivo
+"""
 from __future__ import annotations
 
 import hashlib
@@ -5,9 +14,9 @@ import io
 import zipfile
 from typing import Any, Dict, List
 
-from app.services.nfe_xml_extract import parse_nfe_xml
-from app.services.nfe_item_normalizer import normalize_nfe_items
-from app.services.nfe_document_analyzer import analyze_nfe_document
+from app.services.nfse_xml_extract import parse_nfse_xml_abrasf
+from app.services.nfse_service_normalizer import normalize_nfse_items
+from app.services.nfse_document_analyzer import analyze_nfse_document
 
 
 def _sha256(data: bytes) -> str:
@@ -19,7 +28,46 @@ def _is_xml_name(name: str) -> bool:
     return n.endswith(".xml")
 
 
-def parse_nfe_zip_batch_summary(
+def _extract_prestador_from_items(items: list[dict]) -> dict[str, Any]:
+    """Extrai dados do prestador do primeiro item."""
+    if not items:
+        return {}
+    
+    first_item = items[0]
+    fields = first_item.get("fields") or {}
+    
+    cnpj = fields.get("cnpj_fornecedor")
+    
+    return {
+        "doc": cnpj.replace(".", "").replace("/", "").replace("-", "") if cnpj else None,
+        "doc_formatado": cnpj,
+        "nome": None,  # XML ABRASF não traz nome no formato atual
+    }
+
+
+def _extract_tomador_from_items(items: list[dict]) -> dict[str, Any]:
+    """Extrai dados do tomador (não disponível no formato atual)."""
+    return {}
+
+
+def _extract_totals_from_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    """Extrai totais do summary."""
+    tax_totals = summary.get("tax_totals") or {}
+    
+    return {
+        "valor_servicos": summary.get("sum_valor_total_politica_a"),
+        "valor_liquido": summary.get("sum_valor_liquido_politica_b"),
+        "valor_iss": tax_totals.get("sum_valor_iss"),
+        "valor_iss_retido": tax_totals.get("sum_valor_iss_retido"),
+        "valor_pis": tax_totals.get("sum_valor_pis"),
+        "valor_cofins": tax_totals.get("sum_valor_cofins"),
+        "valor_inss": tax_totals.get("sum_valor_inss"),
+        "valor_ir": tax_totals.get("sum_valor_ir"),
+        "valor_csll": tax_totals.get("sum_valor_csll"),
+    }
+
+
+def parse_nfse_zip_batch_summary(
     zip_bytes: bytes,
     filename: str = "upload.zip",
     *,
@@ -27,12 +75,12 @@ def parse_nfe_zip_batch_summary(
     max_total_bytes: int = 50 * 1024 * 1024,  # 50MB descompactado
 ) -> Dict[str, Any]:
     """
-    Processa um ZIP com vários XMLs de NF-e e retorna dados completos por arquivo.
+    Processa um ZIP com vários XMLs de NFS-e e retorna dados completos por arquivo.
 
     Saída:
       - received, filename, sha256_zip
       - count_files_ok, count_files_error
-      - files: lista de resultados por arquivo (header, emit, dest, totals, summary, document, erp_projection)
+      - files: lista de resultados por arquivo
       - errors: lista de erros por arquivo
       - batch_summary: agregações do lote
     """
@@ -53,20 +101,21 @@ def parse_nfe_zip_batch_summary(
     files_out: List[Dict[str, Any]] = []
     errors_out: List[Dict[str, Any]] = []
 
-    # agregações do lote
+    # Agregações do lote
     total_items = 0
-    sum_vnf = 0.0
-    sum_vprod = 0.0
+    sum_valor_servicos = 0.0
+    sum_valor_liquido = 0.0
 
     sum_dec_auto = 0
     sum_dec_review = 0
     sum_dec_block = 0
 
-    sum_missing_ncm = 0
-    sum_missing_cfop = 0
-    sum_item_total_invalid = 0
+    sum_missing_cnae = 0
+    sum_missing_valor = 0
+    sum_cnae_alert = 0
+    sum_liquido_divergente = 0
 
-    # controle de volume descompactado
+    # Controle de volume descompactado
     decompressed_total = 0
 
     try:
@@ -83,7 +132,7 @@ def parse_nfe_zip_batch_summary(
             "batch_summary": {"error": "Invalid zip"},
         }
 
-    # lista de candidatos
+    # Lista de candidatos
     names = [n for n in zf.namelist() if _is_xml_name(n) and not n.endswith("/")]
     names = [n for n in names if "__MACOSX" not in n]
 
@@ -114,18 +163,18 @@ def parse_nfe_zip_batch_summary(
                 })
                 break
 
-            # Parse 1 NF-e
-            parsed = parse_nfe_xml(xml_bytes=xml_bytes, filename=name)
-            if not getattr(parsed, "received", False):
+            # Parse 1 NFS-e
+            parsed = parse_nfse_xml_abrasf(xml_bytes=xml_bytes, filename=name)
+            if not parsed.received:
                 errors_out.append({
                     "file": name,
                     "error": "parse_failed",
-                    "details": getattr(parsed, "error", None)
+                    "details": parsed.summary.get("error") if parsed.summary else None
                 })
                 continue
 
             # Normaliza itens
-            enriched_items, norm_summary = normalize_nfe_items(parsed.items)
+            enriched_items, norm_summary = normalize_nfse_items(parsed.items)
 
             # Mescla summary
             merged_summary = {
@@ -133,33 +182,38 @@ def parse_nfe_zip_batch_summary(
                 **norm_summary,
             }
 
+            # Extrai dados estruturados
+            prestador = _extract_prestador_from_items(parsed.items)
+            tomador = _extract_tomador_from_items(parsed.items)
+            totals = _extract_totals_from_summary(parsed.summary or {})
+
             # Analisa documento (nível nota)
-            doc_out = analyze_nfe_document(
-                header=parsed.header or {},
-                emit=parsed.emit or {},
-                dest=parsed.dest or {},
-                totals=parsed.totals or {},
+            doc_out = analyze_nfse_document(
+                prestador=prestador,
+                tomador=tomador,
+                totals=totals,
                 summary=merged_summary,
                 enriched_items=enriched_items,
-                filial_by_dest_doc=None,
+                filial_by_tomador_doc=None,
             )
 
             # Adiciona document_summary ao summary
             merged_summary["document_summary"] = doc_out.get("document_summary")
 
-            # agrega lote
+            # Agrega lote
             total_items += int(parsed.count or 0)
 
-            vnf = parsed.totals.get("vNF")
-            vprod = parsed.totals.get("vProd")
-            if vnf is not None:
+            valor_serv = parsed.summary.get("sum_valor_total_politica_a") if parsed.summary else None
+            valor_liq = parsed.summary.get("sum_valor_liquido_politica_b") if parsed.summary else None
+            
+            if valor_serv is not None:
                 try:
-                    sum_vnf += float(vnf)
+                    sum_valor_servicos += float(valor_serv)
                 except Exception:
                     pass
-            if vprod is not None:
+            if valor_liq is not None:
                 try:
-                    sum_vprod += float(vprod)
+                    sum_valor_liquido += float(valor_liq)
                 except Exception:
                     pass
 
@@ -170,9 +224,10 @@ def parse_nfe_zip_batch_summary(
             sum_dec_review += int(ds.get("review", 0) or 0)
             sum_dec_block += int(ds.get("block", 0) or 0)
 
-            sum_missing_ncm += int(qs.get("missing_ncm", 0) or 0)
-            sum_missing_cfop += int(qs.get("missing_cfop", 0) or 0)
-            sum_item_total_invalid += int(qs.get("item_total_invalid", 0) or 0)
+            sum_missing_cnae += int(qs.get("missing_cnae", 0) or 0)
+            sum_missing_valor += int(qs.get("missing_valor", 0) or 0)
+            sum_cnae_alert += int(qs.get("cnae_alert", 0) or 0)
+            sum_liquido_divergente += int(qs.get("liquido_divergente", 0) or 0)
 
             # Extrai nome do arquivo sem path
             file_basename = name.split("/")[-1].split("\\")[-1]
@@ -182,14 +237,13 @@ def parse_nfe_zip_batch_summary(
                 "xml_sha256": _sha256(xml_bytes),
                 "received": True,
                 "count_items": int(parsed.count or 0),
-                "header": parsed.header,
-                "emit": parsed.emit,
-                "dest": parsed.dest,
-                "totals": parsed.totals,
+                "prestador": prestador,
+                "tomador": tomador,
+                "totals": totals,
                 "summary": merged_summary,
                 "document": doc_out.get("document"),
                 "erp_projection": doc_out.get("erp_projection"),
-                "items": enriched_items,  # Itens normalizados
+                "items": enriched_items,
             })
 
         except Exception as exc:
@@ -203,17 +257,18 @@ def parse_nfe_zip_batch_summary(
         "count_files_ok": len(files_out),
         "count_files_error": len(errors_out),
         "count_total_items": total_items,
-        "sum_vNF": round(sum_vnf, 2),
-        "sum_vProd": round(sum_vprod, 2),
+        "sum_valor_servicos": round(sum_valor_servicos, 2),
+        "sum_valor_liquido": round(sum_valor_liquido, 2),
         "decision_summary": {
             "auto": sum_dec_auto,
             "review": sum_dec_review,
             "block": sum_dec_block,
         },
         "quality_summary": {
-            "missing_ncm": sum_missing_ncm,
-            "missing_cfop": sum_missing_cfop,
-            "item_total_invalid": sum_item_total_invalid,
+            "missing_cnae": sum_missing_cnae,
+            "missing_valor": sum_missing_valor,
+            "cnae_alert": sum_cnae_alert,
+            "liquido_divergente": sum_liquido_divergente,
         },
         "limits": {
             "max_files": max_files,

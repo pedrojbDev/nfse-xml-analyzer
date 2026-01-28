@@ -125,7 +125,45 @@ def _confidence_for_item(fields: Dict[str, Any]) -> Tuple[List[str], float]:
 
 
 def _findtext(comp: ET.Element, xpath: str) -> Optional[str]:
-    return comp.findtext(xpath, default=None, namespaces=ABRASF_NS)
+    """
+    Tenta encontrar texto usando XPath com namespace, fallback para local-name.
+    """
+    # Tentativa 1: com namespace ABRASF
+    result = comp.findtext(xpath, default=None, namespaces=ABRASF_NS)
+    if result:
+        return result
+    
+    # Tentativa 2: extrair elementos do xpath e buscar sem namespace
+    # Ex: ".//nfse:InfNfse/nfse:Numero" -> ".//InfNfse/Numero"
+    xpath_no_ns = xpath.replace("nfse:", "")
+    result = comp.findtext(xpath_no_ns, default=None)
+    if result:
+        return result
+    
+    # Tentativa 3: buscar pelo último elemento do xpath usando iter
+    # Ex: ".//nfse:Servico/nfse:Valores/nfse:ValorServicos" -> busca ValorServicos
+    parts = xpath.split("/")
+    if parts:
+        last_part = parts[-1].replace("nfse:", "")
+        for el in comp.iter():
+            tag = el.tag
+            local = tag.split("}", 1)[-1] if "}" in tag else tag
+            if local == last_part:
+                if el.text and el.text.strip():
+                    return el.text.strip()
+    
+    return None
+
+
+def _findtext_multi(comp: ET.Element, xpaths: list[str]) -> Optional[str]:
+    """
+    Tenta múltiplos XPaths e retorna o primeiro resultado encontrado.
+    """
+    for xpath in xpaths:
+        result = _findtext(comp, xpath)
+        if result:
+            return result
+    return None
 
 
 def _extract_taxes(comp: ET.Element) -> Dict[str, Any]:
@@ -134,28 +172,88 @@ def _extract_taxes(comp: ET.Element) -> Dict[str, Any]:
     Mantém tudo opcional: se não existir no emissor, retorna None nos campos.
     """
     # Em alguns emissores o valor líquido aparece aqui:
-    valor_liquido_nfse = _to_float(_findtext(comp, ".//nfse:InfNfse/nfse:ValorLiquidoNfse"))
+    valor_liquido_nfse = _to_float(_findtext_multi(comp, [
+        ".//nfse:InfNfse/nfse:ValorLiquidoNfse",
+        ".//nfse:ValorLiquidoNfse",
+        ".//ValorLiquidoNfse"
+    ]))
 
-    # Servico/Valores (ABRASF)
-    iss_retido = _to_int_boolflag(_findtext(comp, ".//nfse:Servico/nfse:Valores/nfse:IssRetido"))
+    # Servico/Valores (ABRASF) - usando fallbacks robustos
+    iss_retido = _to_int_boolflag(_findtext_multi(comp, [
+        ".//nfse:Servico/nfse:Valores/nfse:IssRetido",
+        ".//nfse:Valores/nfse:IssRetido",
+        ".//IssRetido"
+    ]))
 
-    base_calculo = _to_float(_findtext(comp, ".//nfse:Servico/nfse:Valores/nfse:BaseCalculo"))
-    aliquota = _to_float(_findtext(comp, ".//nfse:Servico/nfse:Valores/nfse:Aliquota"))
+    base_calculo = _to_float(_findtext_multi(comp, [
+        ".//nfse:Servico/nfse:Valores/nfse:BaseCalculo",
+        ".//nfse:Valores/nfse:BaseCalculo",
+        ".//BaseCalculo"
+    ]))
+    aliquota = _to_float(_findtext_multi(comp, [
+        ".//nfse:Servico/nfse:Valores/nfse:Aliquota",
+        ".//nfse:Valores/nfse:Aliquota",
+        ".//Aliquota"
+    ]))
 
-    valor_iss = _to_float(_findtext(comp, ".//nfse:Servico/nfse:Valores/nfse:ValorIss"))
-    valor_iss_retido = _to_float(_findtext(comp, ".//nfse:Servico/nfse:Valores/nfse:ValorIssRetido"))
+    valor_iss = _to_float(_findtext_multi(comp, [
+        ".//nfse:Servico/nfse:Valores/nfse:ValorIss",
+        ".//nfse:Valores/nfse:ValorIss",
+        ".//ValorIss"
+    ]))
+    valor_iss_retido = _to_float(_findtext_multi(comp, [
+        ".//nfse:Servico/nfse:Valores/nfse:ValorIssRetido",
+        ".//nfse:Valores/nfse:ValorIssRetido",
+        ".//ValorIssRetido"
+    ]))
 
-    valor_deducoes = _to_float(_findtext(comp, ".//nfse:Servico/nfse:Valores/nfse:ValorDeducoes"))
+    valor_deducoes = _to_float(_findtext_multi(comp, [
+        ".//nfse:Servico/nfse:Valores/nfse:ValorDeducoes",
+        ".//nfse:Valores/nfse:ValorDeducoes",
+        ".//ValorDeducoes"
+    ]))
 
-    valor_pis = _to_float(_findtext(comp, ".//nfse:Servico/nfse:Valores/nfse:ValorPis"))
-    valor_cofins = _to_float(_findtext(comp, ".//nfse:Servico/nfse:Valores/nfse:ValorCofins"))
-    valor_inss = _to_float(_findtext(comp, ".//nfse:Servico/nfse:Valores/nfse:ValorInss"))
-    valor_ir = _to_float(_findtext(comp, ".//nfse:Servico/nfse:Valores/nfse:ValorIr"))
-    valor_csll = _to_float(_findtext(comp, ".//nfse:Servico/nfse:Valores/nfse:ValorCsll"))
+    valor_pis = _to_float(_findtext_multi(comp, [
+        ".//nfse:Servico/nfse:Valores/nfse:ValorPis",
+        ".//nfse:Valores/nfse:ValorPis",
+        ".//ValorPis"
+    ]))
+    valor_cofins = _to_float(_findtext_multi(comp, [
+        ".//nfse:Servico/nfse:Valores/nfse:ValorCofins",
+        ".//nfse:Valores/nfse:ValorCofins",
+        ".//ValorCofins"
+    ]))
+    valor_inss = _to_float(_findtext_multi(comp, [
+        ".//nfse:Servico/nfse:Valores/nfse:ValorInss",
+        ".//nfse:Valores/nfse:ValorInss",
+        ".//ValorInss"
+    ]))
+    valor_ir = _to_float(_findtext_multi(comp, [
+        ".//nfse:Servico/nfse:Valores/nfse:ValorIr",
+        ".//nfse:Valores/nfse:ValorIr",
+        ".//ValorIr"
+    ]))
+    valor_csll = _to_float(_findtext_multi(comp, [
+        ".//nfse:Servico/nfse:Valores/nfse:ValorCsll",
+        ".//nfse:Valores/nfse:ValorCsll",
+        ".//ValorCsll"
+    ]))
 
-    outras_retencoes = _to_float(_findtext(comp, ".//nfse:Servico/nfse:Valores/nfse:OutrasRetencoes"))
-    desconto_incondicionado = _to_float(_findtext(comp, ".//nfse:Servico/nfse:Valores/nfse:DescontoIncondicionado"))
-    desconto_condicionado = _to_float(_findtext(comp, ".//nfse:Servico/nfse:Valores/nfse:DescontoCondicionado"))
+    outras_retencoes = _to_float(_findtext_multi(comp, [
+        ".//nfse:Servico/nfse:Valores/nfse:OutrasRetencoes",
+        ".//nfse:Valores/nfse:OutrasRetencoes",
+        ".//OutrasRetencoes"
+    ]))
+    desconto_incondicionado = _to_float(_findtext_multi(comp, [
+        ".//nfse:Servico/nfse:Valores/nfse:DescontoIncondicionado",
+        ".//nfse:Valores/nfse:DescontoIncondicionado",
+        ".//DescontoIncondicionado"
+    ]))
+    desconto_condicionado = _to_float(_findtext_multi(comp, [
+        ".//nfse:Servico/nfse:Valores/nfse:DescontoCondicionado",
+        ".//nfse:Valores/nfse:DescontoCondicionado",
+        ".//DescontoCondicionado"
+    ]))
 
     taxes = {
         "iss_retido": iss_retido,  # normalmente 1=sim, 2=não (depende do emissor)
@@ -280,7 +378,22 @@ def _parse_all_items_from_xml(xml_bytes: bytes) -> Tuple[List[Dict[str, Any]], D
     Acrescenta bloco 'taxes' por nota.
     """
     root = ET.fromstring(xml_bytes)
+    
+    # Tentativa 1: com namespace ABRASF
     comp_nodes = root.findall(".//nfse:CompNfse", ABRASF_NS)
+    
+    # Tentativa 2: sem namespace (fallback)
+    if not comp_nodes:
+        comp_nodes = root.findall(".//CompNfse")
+    
+    # Tentativa 3: busca por local-name
+    if not comp_nodes:
+        comp_nodes = []
+        for el in root.iter():
+            tag = el.tag
+            local = tag.split("}", 1)[-1] if "}" in tag else tag
+            if local == "CompNfse":
+                comp_nodes.append(el)
 
     items: List[Dict[str, Any]] = []
 
@@ -314,18 +427,47 @@ def _parse_all_items_from_xml(xml_bytes: bytes) -> Tuple[List[Dict[str, Any]], D
 
     critical = ("numero_nota", "data_emissao", "valor_total", "competencia", "cnpj_fornecedor")
 
-    for comp in comp_nodes:
-        numero = _findtext(comp, ".//nfse:InfNfse/nfse:Numero")
-        data_emissao_raw = _findtext(comp, ".//nfse:InfNfse/nfse:DataEmissao")
+    for idx, comp in enumerate(comp_nodes):
+        # Extração com fallbacks robustos
+        numero = _findtext_multi(comp, [
+            ".//nfse:InfNfse/nfse:Numero",
+            ".//nfse:Numero",
+            ".//Numero"
+        ])
+        
+        data_emissao_raw = _findtext_multi(comp, [
+            ".//nfse:InfNfse/nfse:DataEmissao",
+            ".//nfse:DataEmissao",
+            ".//DataEmissao"
+        ])
 
-        competencia_raw = _findtext(comp, ".//nfse:InfNfse/nfse:Competencia")
-        if not competencia_raw:
-            competencia_raw = _findtext(comp, ".//nfse:Competencia")
+        competencia_raw = _findtext_multi(comp, [
+            ".//nfse:InfNfse/nfse:Competencia",
+            ".//nfse:Competencia",
+            ".//Competencia"
+        ])
 
-        cnpj_prestador = _findtext(comp, ".//nfse:PrestadorServico/nfse:IdentificacaoPrestador/nfse:Cnpj")
+        cnpj_prestador = _findtext_multi(comp, [
+            ".//nfse:PrestadorServico/nfse:IdentificacaoPrestador/nfse:Cnpj",
+            ".//nfse:IdentificacaoPrestador/nfse:Cnpj",
+            ".//PrestadorServico/IdentificacaoPrestador/Cnpj",
+            ".//IdentificacaoPrestador/Cnpj",
+            ".//Cnpj"
+        ])
 
-        valor_servicos_raw = _findtext(comp, ".//nfse:Servico/nfse:Valores/nfse:ValorServicos")
-        discriminacao = _findtext(comp, ".//nfse:Servico/nfse:Discriminacao")
+        valor_servicos_raw = _findtext_multi(comp, [
+            ".//nfse:Servico/nfse:Valores/nfse:ValorServicos",
+            ".//nfse:Valores/nfse:ValorServicos",
+            ".//Servico/Valores/ValorServicos",
+            ".//Valores/ValorServicos",
+            ".//ValorServicos"
+        ])
+        
+        discriminacao = _findtext_multi(comp, [
+            ".//nfse:Servico/nfse:Discriminacao",
+            ".//nfse:Discriminacao",
+            ".//Discriminacao"
+        ])
         discriminacao_raw = discriminacao.strip() if discriminacao else None
 
 
@@ -679,3 +821,421 @@ def export_nfse_items_to_csv(items: List[Dict[str, Any]]) -> str:
     return output.getvalue()
 
 
+# =============================================================================
+# NOVA FUNÇÃO: Extrai múltiplas notas individuais de um único XML
+# =============================================================================
+
+@dataclass(frozen=True)
+class NfseNoteResult:
+    """Representa uma nota fiscal de serviço individual extraída do XML."""
+    received: bool
+    numero_nota: Optional[str]
+    codigo_verificacao: Optional[str]
+    data_emissao: Optional[str]
+    competencia: Optional[str]
+    prestador: Dict[str, Any]
+    tomador: Dict[str, Any]
+    totals: Dict[str, Any]
+    taxes: Dict[str, Any]
+    servico: Dict[str, Any]
+    validations: Dict[str, Any]
+    decision: str
+    reasons: List[str]
+    raw_xml: Dict[str, Any]
+
+
+def _extract_prestador_from_comp(comp: ET.Element) -> Dict[str, Any]:
+    """Extrai dados completos do prestador de um CompNfse."""
+    cnpj = _findtext_multi(comp, [
+        ".//nfse:PrestadorServico/nfse:IdentificacaoPrestador/nfse:Cnpj",
+        ".//nfse:IdentificacaoPrestador/nfse:Cnpj",
+        ".//PrestadorServico/IdentificacaoPrestador/Cnpj",
+        ".//Cnpj"
+    ])
+    
+    inscricao_municipal = _findtext_multi(comp, [
+        ".//nfse:PrestadorServico/nfse:IdentificacaoPrestador/nfse:InscricaoMunicipal",
+        ".//nfse:IdentificacaoPrestador/nfse:InscricaoMunicipal",
+        ".//InscricaoMunicipal"
+    ])
+    
+    razao_social = _findtext_multi(comp, [
+        ".//nfse:PrestadorServico/nfse:RazaoSocial",
+        ".//PrestadorServico/RazaoSocial",
+        ".//RazaoSocial"
+    ])
+    
+    nome_fantasia = _findtext_multi(comp, [
+        ".//nfse:PrestadorServico/nfse:NomeFantasia",
+        ".//PrestadorServico/NomeFantasia",
+        ".//NomeFantasia"
+    ])
+    
+    # Endereço do prestador
+    endereco = _findtext_multi(comp, [
+        ".//nfse:PrestadorServico/nfse:Endereco/nfse:Endereco",
+        ".//PrestadorServico/Endereco/Endereco"
+    ])
+    
+    municipio = _findtext_multi(comp, [
+        ".//nfse:PrestadorServico/nfse:Endereco/nfse:CodigoMunicipio",
+        ".//PrestadorServico/Endereco/CodigoMunicipio"
+    ])
+    
+    uf = _findtext_multi(comp, [
+        ".//nfse:PrestadorServico/nfse:Endereco/nfse:Uf",
+        ".//PrestadorServico/Endereco/Uf"
+    ])
+    
+    cnpj_digits = _digits_only(cnpj)
+    
+    return {
+        "doc": cnpj_digits,
+        "doc_formatado": _fmt_cnpj_mask(cnpj_digits) or cnpj,
+        "inscricao_municipal": inscricao_municipal,
+        "razao_social": razao_social,
+        "nome_fantasia": nome_fantasia,
+        "nome": razao_social or nome_fantasia,
+        "endereco": endereco,
+        "municipio": municipio,
+        "uf": uf,
+    }
+
+
+def _extract_tomador_from_comp(comp: ET.Element) -> Dict[str, Any]:
+    """Extrai dados completos do tomador de um CompNfse."""
+    # CNPJ ou CPF
+    cnpj = _findtext_multi(comp, [
+        ".//nfse:TomadorServico/nfse:IdentificacaoTomador/nfse:CpfCnpj/nfse:Cnpj",
+        ".//TomadorServico/IdentificacaoTomador/CpfCnpj/Cnpj"
+    ])
+    
+    cpf = _findtext_multi(comp, [
+        ".//nfse:TomadorServico/nfse:IdentificacaoTomador/nfse:CpfCnpj/nfse:Cpf",
+        ".//TomadorServico/IdentificacaoTomador/CpfCnpj/Cpf"
+    ])
+    
+    doc = cnpj or cpf
+    doc_digits = _digits_only(doc)
+    
+    razao_social = _findtext_multi(comp, [
+        ".//nfse:TomadorServico/nfse:RazaoSocial",
+        ".//TomadorServico/RazaoSocial"
+    ])
+    
+    endereco = _findtext_multi(comp, [
+        ".//nfse:TomadorServico/nfse:Endereco/nfse:Endereco",
+        ".//TomadorServico/Endereco/Endereco"
+    ])
+    
+    municipio = _findtext_multi(comp, [
+        ".//nfse:TomadorServico/nfse:Endereco/nfse:CodigoMunicipio",
+        ".//TomadorServico/Endereco/CodigoMunicipio"
+    ])
+    
+    uf = _findtext_multi(comp, [
+        ".//nfse:TomadorServico/nfse:Endereco/nfse:Uf",
+        ".//TomadorServico/Endereco/Uf"
+    ])
+    
+    return {
+        "doc": doc_digits,
+        "doc_formatado": _fmt_cnpj_mask(doc_digits) if doc_digits and len(doc_digits) == 14 else doc_digits,
+        "tipo_doc": "CNPJ" if cnpj else ("CPF" if cpf else None),
+        "razao_social": razao_social,
+        "nome": razao_social,
+        "endereco": endereco,
+        "municipio": municipio,
+        "uf": uf,
+    }
+
+
+def _extract_single_note_from_comp(comp: ET.Element, index: int) -> Dict[str, Any]:
+    """
+    Extrai uma nota fiscal completa de um elemento CompNfse.
+    Cada CompNfse é uma nota fiscal individual.
+    """
+    # Dados básicos da nota
+    numero = _findtext_multi(comp, [
+        ".//nfse:InfNfse/nfse:Numero",
+        ".//nfse:Numero",
+        ".//Numero"
+    ])
+    
+    codigo_verificacao = _findtext_multi(comp, [
+        ".//nfse:InfNfse/nfse:CodigoVerificacao",
+        ".//nfse:CodigoVerificacao",
+        ".//CodigoVerificacao"
+    ])
+    
+    data_emissao_raw = _findtext_multi(comp, [
+        ".//nfse:InfNfse/nfse:DataEmissao",
+        ".//nfse:DataEmissao",
+        ".//DataEmissao"
+    ])
+    
+    competencia_raw = _findtext_multi(comp, [
+        ".//nfse:InfNfse/nfse:Competencia",
+        ".//nfse:Competencia",
+        ".//Competencia"
+    ])
+    
+    # Datas formatadas
+    dt_emissao = _parse_iso_datetime(data_emissao_raw)
+    dt_comp = _parse_iso_datetime(competencia_raw)
+    
+    # Prestador e Tomador
+    prestador = _extract_prestador_from_comp(comp)
+    tomador = _extract_tomador_from_comp(comp)
+    
+    # Dados do serviço
+    discriminacao = _findtext_multi(comp, [
+        ".//nfse:Servico/nfse:Discriminacao",
+        ".//nfse:Discriminacao",
+        ".//Discriminacao"
+    ])
+    
+    codigo_tributacao = _findtext_multi(comp, [
+        ".//nfse:Servico/nfse:CodigoTributacaoMunicipio",
+        ".//CodigoTributacaoMunicipio"
+    ])
+    
+    item_lista_servico = _findtext_multi(comp, [
+        ".//nfse:Servico/nfse:ItemListaServico",
+        ".//ItemListaServico"
+    ])
+    
+    cnae = _extract_cnae_from_comp(comp)
+    
+    # Valores
+    valor_servicos_raw = _findtext_multi(comp, [
+        ".//nfse:Servico/nfse:Valores/nfse:ValorServicos",
+        ".//nfse:Valores/nfse:ValorServicos",
+        ".//ValorServicos"
+    ])
+    
+    valor_servicos = _to_float(valor_servicos_raw)
+    
+    # Tributos (usando a função existente)
+    taxes = _extract_taxes(comp)
+    
+    # Calcula valor líquido se não informado
+    valor_liquido = taxes.get("valor_liquido_nfse") or taxes.get("valor_liquido_calculado_politica_b")
+    
+    # Totais
+    totals = {
+        "valor_servicos": valor_servicos,
+        "valor_liquido": valor_liquido,
+        "valor_deducoes": taxes.get("valor_deducoes"),
+        "valor_pis": taxes.get("valor_pis"),
+        "valor_cofins": taxes.get("valor_cofins"),
+        "valor_inss": taxes.get("valor_inss"),
+        "valor_ir": taxes.get("valor_ir"),
+        "valor_csll": taxes.get("valor_csll"),
+        "valor_iss": taxes.get("valor_iss"),
+        "valor_iss_retido": taxes.get("valor_iss_retido"),
+    }
+    
+    # Serviço
+    servico = {
+        "discriminacao": discriminacao,
+        "descricao_resumida": _guess_descricao_servico(discriminacao),
+        "codigo_tributacao": codigo_tributacao,
+        "item_lista_servico": item_lista_servico,
+        "cnae": cnae,
+    }
+    
+    # Validação CNAE vs Descrição
+    validation_cnae = validate_cnae_vs_descricao(
+        cnae=cnae,
+        descricao=discriminacao or servico.get("descricao_resumida"),
+    )
+    
+    validations = {
+        "cnae_vs_descricao": validation_cnae,
+    }
+    
+    # Decisão para ERP
+    item_for_decision = {
+        "fields": {
+            "numero_nota": numero,
+            "data_emissao": _fmt_br_datetime(dt_emissao),
+            "cnpj_fornecedor": prestador.get("doc_formatado"),
+            "valor_total": valor_servicos,
+            "competencia": _competencia_mm_yyyy(dt_comp),
+            "descricao_servico": servico.get("descricao_resumida"),
+            "cnae": cnae,
+        },
+        "taxes": taxes,
+        "validations": validations,
+        "flags": {
+            "needs_review": validation_cnae.get("status") != "ok",
+            "incomplete": not numero or not valor_servicos,
+            "missing_critical": not numero or not prestador.get("doc"),
+        },
+    }
+    
+    decision, reasons = decide_for_erp_from_xml_item(item_for_decision)
+    
+    # Verifica se é nota cancelada
+    cancelamento = _findtext_multi(comp, [
+        ".//nfse:NfseCancelamento/nfse:Confirmacao/nfse:DataHoraCancelamento",
+        ".//NfseCancelamento/Confirmacao/DataHoraCancelamento"
+    ])
+    
+    is_cancelada = cancelamento is not None
+    if is_cancelada:
+        decision = "BLOCK"
+        reasons = ["NOTA_CANCELADA"] + reasons
+    
+    return {
+        "index": index,
+        "received": True,
+        "numero_nota": numero,
+        "codigo_verificacao": codigo_verificacao,
+        "data_emissao": _fmt_br_datetime(dt_emissao),
+        "data_emissao_iso": data_emissao_raw,
+        "competencia": _competencia_mm_yyyy(dt_comp),
+        "is_cancelada": is_cancelada,
+        "prestador": prestador,
+        "tomador": tomador,
+        "totals": totals,
+        "taxes": taxes,
+        "servico": servico,
+        "validations": validations,
+        "decision": decision,
+        "reasons": reasons,
+    }
+
+
+def parse_nfse_xml_multi_notes(xml_bytes: bytes, filename: str = "upload.xml") -> Dict[str, Any]:
+    """
+    Extrai MÚLTIPLAS notas fiscais de um único XML ABRASF.
+    
+    Cada <CompNfse> é tratado como uma nota fiscal individual.
+    
+    Retorna:
+        - received: bool
+        - filename: str
+        - sha256: str
+        - count: int (número de notas encontradas)
+        - notes: List[Dict] (lista de notas individuais)
+        - batch_summary: Dict (resumo agregado para o gestor)
+    """
+    sha256 = _sha256(xml_bytes)
+    
+    if not xml_bytes:
+        return {
+            "received": False,
+            "filename": filename,
+            "sha256": sha256,
+            "count": 0,
+            "notes": [],
+            "batch_summary": {"error": "Empty body"},
+        }
+    
+    try:
+        root = ET.fromstring(xml_bytes)
+    except Exception as exc:
+        return {
+            "received": False,
+            "filename": filename,
+            "sha256": sha256,
+            "count": 0,
+            "notes": [],
+            "batch_summary": {"error": "Invalid XML", "exception": str(exc)},
+        }
+    
+    # Encontra todos os CompNfse (cada um é uma nota individual)
+    comp_nodes = root.findall(".//nfse:CompNfse", ABRASF_NS)
+    
+    if not comp_nodes:
+        comp_nodes = root.findall(".//CompNfse")
+    
+    if not comp_nodes:
+        comp_nodes = []
+        for el in root.iter():
+            tag = el.tag
+            local = tag.split("}", 1)[-1] if "}" in tag else tag
+            if local == "CompNfse":
+                comp_nodes.append(el)
+    
+    # Extrai cada nota individualmente
+    notes: List[Dict[str, Any]] = []
+    
+    # Contadores para batch_summary
+    sum_valor_servicos = 0.0
+    sum_valor_liquido = 0.0
+    count_auto = 0
+    count_review = 0
+    count_block = 0
+    count_canceladas = 0
+    
+    # Agrupa por prestador para estatísticas
+    prestadores: Dict[str, Dict[str, Any]] = {}
+    
+    for idx, comp in enumerate(comp_nodes):
+        note = _extract_single_note_from_comp(comp, idx)
+        notes.append(note)
+        
+        # Agrega valores
+        vs = note["totals"].get("valor_servicos") or 0
+        vl = note["totals"].get("valor_liquido") or 0
+        sum_valor_servicos += vs
+        sum_valor_liquido += vl
+        
+        # Conta decisões
+        dec = note.get("decision", "REVIEW")
+        if dec == "AUTO":
+            count_auto += 1
+        elif dec == "REVIEW":
+            count_review += 1
+        else:
+            count_block += 1
+        
+        if note.get("is_cancelada"):
+            count_canceladas += 1
+        
+        # Agrupa por prestador
+        prest_doc = note["prestador"].get("doc") or "unknown"
+        if prest_doc not in prestadores:
+            prestadores[prest_doc] = {
+                "doc": prest_doc,
+                "doc_formatado": note["prestador"].get("doc_formatado"),
+                "nome": note["prestador"].get("nome"),
+                "count": 0,
+                "total_valor": 0.0,
+            }
+        prestadores[prest_doc]["count"] += 1
+        prestadores[prest_doc]["total_valor"] += vs
+    
+    # Top prestadores
+    top_prestadores = sorted(
+        prestadores.values(),
+        key=lambda x: x["total_valor"],
+        reverse=True
+    )[:10]
+    
+    batch_summary = {
+        "count_total": len(notes),
+        "count_ativas": len(notes) - count_canceladas,
+        "count_canceladas": count_canceladas,
+        "sum_valor_servicos": round(sum_valor_servicos, 2),
+        "sum_valor_liquido": round(sum_valor_liquido, 2),
+        "decision_summary": {
+            "auto": count_auto,
+            "review": count_review,
+            "block": count_block,
+        },
+        "prestadores_distintos": len(prestadores),
+        "top_prestadores": top_prestadores,
+    }
+    
+    return {
+        "received": True,
+        "filename": filename,
+        "sha256": sha256,
+        "count": len(notes),
+        "notes": notes,
+        "batch_summary": batch_summary,
+    }

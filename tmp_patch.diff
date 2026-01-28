@@ -1,0 +1,24 @@
+﻿*** Begin Patch
+*** Update File: frontend/src/components/layout/sidebar.tsx
+@@
+-  // Feature flag: esconder temporariamente a se??o de NFS-e
++  // Feature flag: esconder temporariamente a seção de NFS-e
+@@
+-          description: "Notas lan?adas no ERP",
++          description: "Notas lançadas no ERP",
+@@
+-          name: "Lan?amento",
++          name: "Lançamento",
+@@
+-          description: "Conferir e lan?ar notas",
++          description: "Conferir e lançar notas",
+@@
+-    // Se??o NFS-e oculta temporariamente; reative setando showNfse = true
++    // Seção NFS-e oculta temporariamente; reative setando showNfse = true
+@@
+-            title: "NFS-e (Servi?os)",
++            title: "NFS-e (Serviços)",
+@@
+-                description: "Vis?o geral dos servi?os",
++                description: "Visão geral dos serviços",
+*** End Patch
