@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 import logging
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Request, Response, UploadFile, File, HTTPException
 
 from app.services.audit_log import append_audit_event
 from app.services.nfe_document_analyzer import analyze_nfe_document
@@ -131,7 +131,7 @@ async def nfe_xml_extract(request: Request, page: int = 1, page_size: int = 50):
 
 
 @router.post("/nfe-xml-extract/summary")
-async def nfe_xml_extract_summary(request: Request):
+async def nfe_xml_extract_summary(file: UploadFile = File(...)):
     """
     Retorna sumário da NF-e com análise do documento.
     
@@ -140,8 +140,24 @@ async def nfe_xml_extract_summary(request: Request):
     Returns:
         JSON com header, emit, dest, totals, summary, document, erp_projection
     """
-    raw = await request.body()
-    filename = request.headers.get("x-filename", "upload.xml")
+    raw = await file.read()
+    filename = file.filename or "upload.xml"
+
+    # Sanitização mínima contra BOM e espaços antes do '<'
+    if raw.startswith(b"\xef\xbb\xbf"):
+        raw = raw[3:]
+    raw = raw.lstrip()
+
+    if not raw or raw[:1] != b"<":
+        first16 = raw[:16].hex() if raw else ""
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "invalid_xml_prefix",
+                "len": len(raw),
+                "first16": first16,
+            },
+        )
     
     result = parse_nfe_xml(xml_bytes=raw, filename=filename)
     
